@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.csv": "plaintext",
+        "stdexcept": "cpp"
+    }
+}
