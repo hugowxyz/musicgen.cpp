@@ -1,1 +1,45 @@
+# Build directories
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Compiled object files and binaries
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.out
+*.a
+*.lib
+
+# ggml generated files (if any)
+ggml-*.bin
+ggml-*.dat
+
+# Model files and checkpoints
 model_dicts/
+*.pt
+*.ckpt
+*.onnx
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# IDE/editor files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+model_dicts/
+CMakeFiles/
+bin/

@@ -12,7 +12,7 @@ metadata = {
     'kernel_size': 5
 }
 
-with open("model.gguf", "wb") as f:
+with open("model_dicts/compression_state_dict.gguf", "wb") as f:
     f.write(GGUF_MAGIC)
     f.write(struct.pack('<I', GGUF_VERSION))
 
