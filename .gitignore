@@ -43,3 +43,5 @@ Thumbs.db
 model_dicts/
 CMakeFiles/
 bin/
+
+compile_commands.json
