@@ -24,4 +24,7 @@ add_executable(test_lstm tests/test_lstm.cpp)
 target_include_directories(test_lstm PRIVATE include ggml/include ggml)
 target_link_libraries(test_lstm PRIVATE ggml)
 
+add_executable(test_quantizer tests/test_quantizer.cpp)
+target_include_directories(test_quantizer PRIVATE include ggml/include ggml)
+target_link_libraries(test_quantizer PRIVATE ggml)
 

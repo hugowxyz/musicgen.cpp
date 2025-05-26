@@ -1,73 +1,142 @@
 #pragma once
 
+#include <cassert>
+#include <vector>
+#include <cstdio>
+
 #include "ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+#include "utils.h"
 
-struct ggml_tensor * ggml_euclidean_distances(struct ggml_context * ctx,
-                                              struct ggml_tensor * residual,     // [B, D]
-                                              struct ggml_tensor * codebook)     // [K, D]
+// One quantization block: holds a K×D embedding table.
+struct quant_block {
+    struct ggml_tensor *embed;  // [K, D]
+};
+
+// A stack of quantization blocks (one per stage).
+struct quantizer {
+    std::vector<quant_block> blocks;
+};
+
+// Encode: map continuous vectors → discrete codes.
+//   encoded_inp: [seq_length, D]
+// returns codes: [seq_length, n_q]
+static struct ggml_tensor *quantizer_encode(
+    const struct quantizer *quant, struct ggml_context *ctx,
+    struct ggml_tensor *encoded_inp)
 {
-    const int64_t B = residual->ne[1];  // batch_size
-    const int64_t D = residual->ne[0];  // dim
-    const int64_t K = codebook->ne[1];  // codebook_size
-
-    // Reshape to [D, 1, B] and [D, K, 1] for broadcasting
-    struct ggml_tensor * residual_exp = ggml_reshape_3d(ctx, residual, D, 1, B); // [D,1,B]
-    struct ggml_tensor * codebook_exp = ggml_reshape_3d(ctx, codebook, D, K, 1);  // [D,K,1]
-
-    // Subtract: [D, K, B]
-    struct ggml_tensor * diff = ggml_sub(ctx, residual_exp, codebook_exp);
-
-    // Square differences: [D, K, B]
-    struct ggml_tensor * sqr = ggml_mul(ctx, diff, diff);
-
-    // Reshape to collapse D: [D, K * B]
-    struct ggml_tensor * sqr_flat = ggml_reshape_2d(ctx, sqr, D, K * B);
-
-    // Sum across D (first dimension), result [1, K * B]
-    struct ggml_tensor * sum = ggml_sum_rows(ctx, sqr_flat);
-
-    // Reshape to [K, B]
-    struct ggml_tensor * sum_reshaped = ggml_reshape_2d(ctx, sum, K, B);
-
-    // Transpose to [B, K]
-    struct ggml_tensor * sum_T = ggml_transpose(ctx, sum_reshaped);
-
-    // Optional square root to get actual Euclidean distance
-    struct ggml_tensor * dist = ggml_sqrt(ctx, sum_T);
-
-    return dist;  // [B, K]
-}
-
-struct ggml_tensor * rvq_forward(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * input,                // [batch_size, dim]
-    struct ggml_tensor ** codebooks,            // array of [codebook_size, dim] for each stage
-    int                  num_stages,
-    int                  codebook_size
-) {
-    struct ggml_tensor * residual = input;
-    struct ggml_tensor * reconstruction = ggml_new_tensor_2d(ctx, input->type, input->ne[0], input->ne[1]);
-
-
-    for (int k = 0; k < num_stages; ++k) {
-        struct ggml_tensor * codebook = codebooks[k];  // [codebook_size, dim]
-
-        // Compute Euclidean distances between residual and all codebook entries
-        struct ggml_tensor * distances = ggml_euclidean_distances(ctx, residual, codebook); // [batch_size, codebook_size]
-
-        // Find nearest codebook index
-        struct ggml_tensor * neg_distances = ggml_neg(ctx, distances);
-        struct ggml_tensor * nearest_index = ggml_argmax(ctx, neg_distances);  // [batch_size]
-
-        // Gather nearest codebook vectors
-        struct ggml_tensor * q_k = ggml_get_rows(ctx, codebook, nearest_index); // [batch_size, dim]
-
-        // Accumulate quantized vector to reconstruction
-        reconstruction = ggml_add(ctx, reconstruction, q_k);
-
-        // Update residual
-        residual = ggml_sub(ctx, residual, q_k);
+    if (!encoded_inp) {
+        std::fprintf(stderr, "%s: null input tensor\n", __func__);
+        return NULL;
     }
 
-    return reconstruction;
+    const int seq_length = encoded_inp->ne[0];
+    const int n_q        = (int)quant->blocks.size();
+
+    // codes[i,j] = code index for time i, quantizer j
+    struct ggml_tensor *codes = ggml_new_tensor_2d(
+        ctx, GGML_TYPE_I32, seq_length, n_q);
+    ggml_set_input(codes);
+
+    // transpose so that residual is [D×seq_length]
+    struct ggml_tensor *inpL     = ggml_cont(ctx, ggml_transpose(ctx, encoded_inp));
+    struct ggml_tensor *residual = inpL;
+    struct ggml_tensor *indices;
+
+    for (int i = 0; i < n_q; ++i) {
+        const quant_block block = quant->blocks[i];
+
+        // compute -2 * (embed × residual)  →  [K×seq_length]
+        struct ggml_tensor *dp = ggml_scale(
+            ctx,
+            ggml_mul_mat(ctx, block.embed, residual),
+            -2.0f
+        );
+
+        // precompute norms
+        // embed norms: [K]     (sum of squares per row)
+        struct ggml_tensor *sqr_embed     = ggml_sqr(ctx, block.embed);
+        struct ggml_tensor *sqr_embed_nrm = ggml_sum_rows(ctx, sqr_embed);
+
+        // input norms: [seq_length]  (sum of squares per column of residual)
+        struct ggml_tensor *sqr_inp     = ggml_sqr(ctx, residual);
+        struct ggml_tensor *sqr_inp_nrm = ggml_sum_rows(ctx, sqr_inp);
+
+        // build full distance matrix:
+        // dist = - (||x||^2 + ||e||^2 - 2 x·e)
+        //    = -||x||^2 + (-2 x·e) - ||e||^2
+        struct ggml_tensor *dist = ggml_add(
+            ctx,
+            ggml_repeat(ctx, sqr_inp_nrm,   dp),  // [K×seq_length]
+            dp
+        );
+        dist = ggml_add(
+            ctx,
+            ggml_repeat(ctx, ggml_transpose(ctx, sqr_embed_nrm), dist),
+            dist
+        );
+        dist = ggml_neg(ctx, dist);
+
+        // 4) pick best code per time step: [seq_length]
+        indices = ggml_argmax(ctx, dist);
+
+        // 5) lookup embeddings [seq_length, D]
+        struct ggml_tensor *quantized = ggml_get_rows(ctx, block.embed, indices);
+
+        // 6) update residual
+        residual = ggml_sub(ctx, residual, quantized);
+
+        // 7) write indices into codes[:, i]
+        codes = ggml_set_1d(
+            ctx, codes, indices,
+            /*offset=*/ i * codes->nb[1]
+        );
+    }
+
+    return codes;
+}
+
+// Decode: map discrete codes → reconstructed vectors.
+//   codes: [seq_length, n_q]
+// returns quantized_out: [seq_length, D]
+static struct ggml_tensor *quantizer_decode(
+    const struct quantizer *quant, struct ggml_context *ctx,
+    struct ggml_tensor *codes)
+{
+    if (!codes) {
+        std::fprintf(stderr, "%s: null codes tensor\n", __func__);
+        return NULL;
+    }
+
+    const int seq_length = codes->ne[0];
+    const int n_q        = codes->ne[1];
+    assert(n_q == (int)quant->blocks.size());
+
+    // hidden_dim = D
+    const int hidden_dim = quant->blocks[0].embed->ne[1];
+
+    // accumulate quantized output in [D×seq_length]
+    struct ggml_tensor *quantized_out = ggml_new_tensor_2d(
+        ctx, GGML_TYPE_F32, hidden_dim, seq_length);
+    ggml_set_input(quantized_out);
+
+    for (int i = 0; i < n_q; ++i) {
+        // view column i of codes: [seq_length]
+        struct ggml_tensor *indices = ggml_view_1d(
+            ctx, codes, seq_length, i * codes->nb[1]
+        );
+
+        // lookup embeddings → [seq_length, D]
+        struct ggml_tensor *quantized = ggml_get_rows(
+            ctx, quant->blocks[i].embed, indices
+        );
+
+        // accumulate
+        quantized_out = ggml_add(ctx, quantized_out, quantized);
+    }
+
+    // transpose back → [seq_length, D]
+    quantized_out = ggml_cont(ctx, ggml_transpose(ctx, quantized_out));
+    return quantized_out;
 }
