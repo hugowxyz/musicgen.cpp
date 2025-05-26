@@ -66,3 +66,31 @@ void print_ggml_3d_tensor(const struct ggml_tensor *tensor) {
         printf(" ]\n\n");
     }
 }
+
+
+struct ggml_tensor *create_1d_tensor(struct ggml_context *ctx, const float *data, int64_t ne0) {
+    struct ggml_tensor *tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne0);
+    memcpy(tensor->data, data, ne0 * sizeof(float));
+    return tensor;
+}
+
+struct ggml_tensor *create_2d_tensor(struct ggml_context *ctx, const float *data, int64_t ne1, int64_t ne0) {
+    // ne1 = rows, ne0 = cols
+    struct ggml_tensor *tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, ne1);
+    memcpy(tensor->data, data, ne0 * ne1 * sizeof(float));
+    return tensor;
+}
+
+struct ggml_tensor *create_3d_tensor(struct ggml_context *ctx, const float *data, int64_t ne2, int64_t ne1, int64_t ne0) {
+    // ne2 = depth, ne1 = rows, ne0 = cols
+    struct ggml_tensor *tensor = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ne0, ne1, ne2);
+    memcpy(tensor->data, data, ne0 * ne1 * ne2 * sizeof(float));
+    return tensor;
+}
+
+struct ggml_tensor * compute_graph_from_tensor(struct ggml_context * ctx, struct ggml_tensor * final_tensor, int n_threads) {
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, final_tensor);
+    ggml_graph_compute_with_ctx(ctx, gf, n_threads);
+    return ggml_graph_node(gf, -1);
+}

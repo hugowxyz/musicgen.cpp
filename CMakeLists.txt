@@ -20,3 +20,8 @@ add_executable(test_read_gguf tests/test_read_gguf.cpp)
 target_include_directories(test_read_gguf PRIVATE include ggml/include ggml)
 target_link_libraries(test_read_gguf PRIVATE ggml)
 
+add_executable(test_seanet tests/test_seanet.cpp)
+target_include_directories(test_seanet PRIVATE include ggml/include ggml)
+target_link_libraries(test_seanet PRIVATE ggml)
+
+

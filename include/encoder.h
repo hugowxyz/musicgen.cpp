@@ -20,16 +20,30 @@
 #include "utils.h"
 
 
+// Encoder parameters, including initial, SEANet block, and downsampling conv params
 struct encodec_encoder_params {
     struct ggml_tensor * input;
 
-    struct ggml_tensor ** conv_weights;
-    struct ggml_tensor ** conv_biases;
+    // Initial Conv1D weights
+    struct ggml_tensor * first_conv_weight_g;    // [64]
+    struct ggml_tensor * first_conv_weight_v;    // [7, 1, 64]
+    struct ggml_tensor * first_conv_bias;        // [64] or NULL
 
-    struct ggml_tensor ** resnet_weights_3x1;
-    struct ggml_tensor ** resnet_biases_3x1;
-    struct ggml_tensor ** resnet_weights_1x1;
-    struct ggml_tensor ** resnet_biases_1x1;
+    // SEANet ResNet block weights (3×1 conv)
+    struct ggml_tensor ** resnet_weight_g1;      // [bottleneck_ch]
+    struct ggml_tensor ** resnet_weight_v1;      // [3, in_ch, bottleneck_ch]
+    struct ggml_tensor ** resnet_bias_bottleneck; // [bottleneck_ch] or NULL
+
+    // SEANet ResNet block weights (1×1 conv)
+    struct ggml_tensor ** resnet_weight_g2;      // [out_ch]
+    struct ggml_tensor ** resnet_weight_v2;      // [1, bottleneck_ch, out_ch]
+    struct ggml_tensor ** resnet_bias_1x1;       // [out_ch] or NULL
+
+    // Downsampling Conv1D weights (after each block)
+    struct ggml_tensor ** down_weight_g;         // [out_ch]
+    struct ggml_tensor ** down_weight_v;         // [ks, in_ch, out_ch]
+    struct ggml_tensor ** down_bias;             // [out_ch] or NULL
+
     int num_resnet_blocks;
 
     // LSTM weights per gate
@@ -44,7 +58,6 @@ struct encodec_encoder_params {
     int codebook_size;
 };
 
-
 struct ggml_cgraph * build_encodec_encoder_graph(
     struct ggml_context * ctx,
     struct encodec_encoder_params * params
@@ -52,15 +65,45 @@ struct ggml_cgraph * build_encodec_encoder_graph(
     struct ggml_cgraph * gf = ggml_new_graph(ctx);
     struct ggml_tensor * x = params->input;
 
-    // ----- Convolution + ResNet Blocks -----
-    for (int i = 0; i < params->num_resnet_blocks; ++i) {
-        x = streamable_conv1d(ctx, x, params->conv_weights[i], params->conv_biases[i], 1, 1, 1);
+    // ----- Initial Conv1D -----
+    // kernel_size=7, padding=3 for "same" output length
+    x = streamable_conv1d_wn(
+        ctx,
+        x,
+        params->first_conv_weight_g,
+        params->first_conv_weight_v,
+        params->first_conv_bias,
+        /*stride=*/1,
+        /*padding=*/3,
+        /*dilation=*/1
+    );
 
+    // ----- SEANet Residual Blocks + Downsampling -----
+    for (int i = 0; i < params->num_resnet_blocks; ++i) {
+        // ResNet block (2×ELU + weight‐normalized convs)
         x = seanet_resnet_block(
             ctx,
             x,
-            params->resnet_weights_3x1[i], params->resnet_biases_3x1[i],
-            params->resnet_weights_1x1[i], params->resnet_biases_1x1[i]
+            params->resnet_weight_g1[i],
+            params->resnet_weight_v1[i],
+            params->resnet_bias_bottleneck[i],
+            params->resnet_weight_g2[i],
+            params->resnet_weight_v2[i],
+            params->resnet_bias_1x1[i]
+        );
+
+        // Downsampling Conv1D after block
+        int ks  = params->down_weight_v[i]->ne[0];
+        int pad = ks / 2;
+        x = streamable_conv1d_wn(
+            ctx,
+            x,
+            params->down_weight_g[i],
+            params->down_weight_v[i],
+            params->down_bias[i],
+            /*stride=*/2,
+            /*padding=*/pad,
+            /*dilation=*/1
         );
     }
 
@@ -71,22 +114,30 @@ struct ggml_cgraph * build_encodec_encoder_graph(
 
     for (int t = 0; t < seq_len; ++t) {
         struct ggml_tensor * x_t = ggml_view_1d(ctx, x, x->ne[1], t * x->ne[1]);
-        struct lstm_state state = lstm_step(ctx, x_t, h_t, c_t,
-                                           params->W_i, params->U_i, params->b_i,
-                                           params->W_f, params->U_f, params->b_f,
-                                           params->W_o, params->U_o, params->b_o,
-                                           params->W_g, params->U_g, params->b_g);
+        struct lstm_state state = lstm_step(
+            ctx, x_t, h_t, c_t,
+            params->W_i, params->U_i, params->b_i,
+            params->W_f, params->U_f, params->b_f,
+            params->W_o, params->U_o, params->b_o,
+            params->W_g, params->U_g, params->b_g
+        );
         h_t = state.h_t;
         c_t = state.c_t;
     }
 
     // ----- RVQ -----
-    struct ggml_tensor * rvq_out = rvq_forward(ctx, h_t, params->codebooks, params->num_stages, params->codebook_size);
+    struct ggml_tensor * rvq_out = rvq_forward(
+        ctx,
+        h_t,
+        params->codebooks,
+        params->num_stages,
+        params->codebook_size
+    );
 
     ggml_build_forward_expand(gf, rvq_out);
-
     return gf;
 }
+
 
 struct ggml_tensor * compute_encodec_encoder(
     struct ggml_context * ctx,

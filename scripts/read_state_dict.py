@@ -2,7 +2,9 @@ import torch
 
 state_dict = torch.load('model_dicts/compression_state_dict.bin', map_location='cpu')
 
-print(state_dict['best_state'].keys())
+# print(state_dict.keys())
+print(state_dict['xp.cfg'])
+# print(state_dict['best_state'].keys())
 
 
 """
