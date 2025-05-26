@@ -1,7 +1,6 @@
 #pragma once
 #include "ggml.h"
 
-
 struct lstm_state {
     struct ggml_tensor * h_t;  // Hidden state
     struct ggml_tensor * c_t;  // Cell state
@@ -9,55 +8,43 @@ struct lstm_state {
 
 struct lstm_state lstm_step(
     struct ggml_context * ctx,
-    struct ggml_tensor  * x_t,
-    struct ggml_tensor  * h_prev,
-    struct ggml_tensor  * c_prev,
-    struct ggml_tensor  * W_i, struct ggml_tensor * U_i, struct ggml_tensor * b_i,
-    struct ggml_tensor  * W_f, struct ggml_tensor * U_f, struct ggml_tensor * b_f,
-    struct ggml_tensor  * W_o, struct ggml_tensor * U_o, struct ggml_tensor * b_o,
-    struct ggml_tensor  * W_g, struct ggml_tensor * U_g, struct ggml_tensor * b_g
+    struct ggml_tensor  * x_t,             // [D]
+    struct ggml_tensor  * h_prev,          // [H]
+    struct ggml_tensor  * c_prev,          // [H]
+    struct ggml_tensor  * weight_ih_l0,    // [4H, D]
+    struct ggml_tensor  * weight_hh_l0,    // [4H, H]
+    struct ggml_tensor  * bias_ih_l0,      // [4H]
+    struct ggml_tensor  * bias_hh_l0       // [4H]
 ) {
-    // Input gate: i_t = sigmoid(W_i * x_t + U_i * h_prev + b_i)
-    struct ggml_tensor * i_t = ggml_sigmoid(ctx, 
-        ggml_add(ctx, 
-            ggml_add(ctx, ggml_mul_mat(ctx, W_i, x_t), ggml_mul_mat(ctx, U_i, h_prev)),
-            b_i
-        )
-    );
-
-    // Forget gate: f_t = sigmoid(W_f * x_t + U_f * h_prev + b_f)
-    struct ggml_tensor * f_t = ggml_sigmoid(ctx, 
-        ggml_add(ctx, 
-            ggml_add(ctx, ggml_mul_mat(ctx, W_f, x_t), ggml_mul_mat(ctx, U_f, h_prev)),
-            b_f
-        )
-    );
-
-    // Output gate: o_t = sigmoid(W_o * x_t + U_o * h_prev + b_o)
-    struct ggml_tensor * o_t = ggml_sigmoid(ctx, 
-        ggml_add(ctx, 
-            ggml_add(ctx, ggml_mul_mat(ctx, W_o, x_t), ggml_mul_mat(ctx, U_o, h_prev)),
-            b_o
-        )
-    );
-
-    // Cell candidate: g_t = tanh(W_g * x_t + U_g * h_prev + b_g)
-    struct ggml_tensor * g_t = ggml_tanh(ctx, 
-        ggml_add(ctx, 
-            ggml_add(ctx, ggml_mul_mat(ctx, W_g, x_t), ggml_mul_mat(ctx, U_g, h_prev)),
-            b_g
-        )
-    );
-
-    // Updated cell state: c_t = f_t * c_prev + i_t * g_t
+    // fused matmuls + add both biases
+    struct ggml_tensor * WX    = ggml_mul_mat(ctx, weight_ih_l0, x_t);
+    struct ggml_tensor * UH    = ggml_mul_mat(ctx, weight_hh_l0, h_prev);
+    struct ggml_tensor * B     = ggml_add   (ctx, bias_ih_l0, bias_hh_l0);
+    struct ggml_tensor * gates = ggml_add   (ctx, ggml_add(ctx, WX, UH), B);
+    
+    // compute H = (4H)/4
+    const int total = bias_ih_l0->ne[0];   // = 4*H
+    const int H     = total / 4;
+    
+    // carve out each gate pre-activation with view_1d
+    const size_t stride = gates->nb[0];    // byte-stride per element
+    struct ggml_tensor * i_p = ggml_view_1d(ctx, gates, H, (size_t)0 * H * stride);
+    struct ggml_tensor * f_p = ggml_view_1d(ctx, gates, H, (size_t)1 * H * stride);
+    struct ggml_tensor * g_p = ggml_view_1d(ctx, gates, H, (size_t)2 * H * stride);
+    struct ggml_tensor * o_p = ggml_view_1d(ctx, gates, H, (size_t)3 * H * stride);
+    
+    // activations
+    struct ggml_tensor * i_t = ggml_sigmoid(ctx, i_p);
+    struct ggml_tensor * f_t = ggml_sigmoid(ctx, f_p);
+    struct ggml_tensor * g_t = ggml_tanh   (ctx, g_p);
+    struct ggml_tensor * o_t = ggml_sigmoid(ctx, o_p);
+    
+    // cell & hidden updates
     struct ggml_tensor * c_t = ggml_add(ctx,
         ggml_mul(ctx, f_t, c_prev),
         ggml_mul(ctx, i_t, g_t)
     );
-
-    // Updated hidden state: h_t = o_t * tanh(c_t)
     struct ggml_tensor * h_t = ggml_mul(ctx, o_t, ggml_tanh(ctx, c_t));
-
-    struct lstm_state state = { h_t, c_t };
-    return state;
+    
+    return { h_t, c_t };
 }

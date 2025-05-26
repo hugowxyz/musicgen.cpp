@@ -12,10 +12,6 @@ add_executable(test_conv tests/test_conv.cpp)
 target_include_directories(test_conv PRIVATE include ggml/include ggml)
 target_link_libraries(test_conv PRIVATE ggml)
 
-add_executable(test_gguf tests/test_gguf.cpp)
-target_include_directories(test_gguf PRIVATE include ggml/include ggml)
-target_link_libraries(test_gguf PRIVATE ggml)
-
 add_executable(test_read_gguf tests/test_read_gguf.cpp)
 target_include_directories(test_read_gguf PRIVATE include ggml/include ggml)
 target_link_libraries(test_read_gguf PRIVATE ggml)
@@ -23,5 +19,9 @@ target_link_libraries(test_read_gguf PRIVATE ggml)
 add_executable(test_seanet tests/test_seanet.cpp)
 target_include_directories(test_seanet PRIVATE include ggml/include ggml)
 target_link_libraries(test_seanet PRIVATE ggml)
+
+add_executable(test_lstm tests/test_lstm.cpp)
+target_include_directories(test_lstm PRIVATE include ggml/include ggml)
+target_link_libraries(test_lstm PRIVATE ggml)
 
 
