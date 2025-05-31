@@ -7,66 +7,82 @@
 #include <stdlib.h>
 #include <string.h>
 
+void print_scalar_value(const ggml_tensor *tensor, int64_t idx) {
+    switch (tensor->type) {
+        case GGML_TYPE_F32: {
+            float *data = (float *)tensor->data;
+            printf(" %.2f", data[idx]);
+            break;
+        }
+        case GGML_TYPE_F16: {
+            ggml_fp16_t *data = (ggml_fp16_t *)tensor->data;
+            float val = ggml_fp16_to_fp32(data[idx]);
+            printf(" %.2f", val);
+            break;
+        }
+        case GGML_TYPE_I8: {
+            int8_t *data = (int8_t *)tensor->data;
+            printf(" %d", data[idx]);
+            break;
+        }
+        case GGML_TYPE_I16: {
+            int16_t *data = (int16_t *)tensor->data;
+            printf(" %d", data[idx]);
+            break;
+        }
+        case GGML_TYPE_I32: {
+            int32_t *data = (int32_t *)tensor->data;
+            printf(" %d", data[idx]);
+            break;
+        }
+        default:
+            printf(" (unsupported type %d)", tensor->type);
+            break;
+    }
+}
+
 void print_ggml_1d_tensor(const ggml_tensor *tensor) {
     const int64_t ne0 = tensor->ne[0];
-    float *data = (float *)tensor->data;
-
-    printf("Result (shape %lld):\n[", ne0);
+    printf("Result (internal shape %lld):\n[", ne0);
     for (int64_t i = 0; i < ne0; ++i) {
-        printf(" %.2f", data[i]);
+        print_scalar_value(tensor, i);
     }
     printf(" ]\n");
 }
 
 void print_ggml_2d_tensor(const ggml_tensor *tensor) {
-    const int64_t ne0 = tensor->ne[0]; // columns (innermost)
+    const int64_t ne0 = tensor->ne[0]; // columns
     const int64_t ne1 = tensor->ne[1]; // rows
-    float *data = (float *)tensor->data;
 
-    printf("Result (shape %lld x %lld):\n[", ne0, ne1);
+    printf("Result (internal shape %lld x %lld):\n[", ne0, ne1);
     for (int64_t j = 0; j < ne1; ++j) {
-        if (j > 0)
-            printf("\n");
+        if (j > 0) printf("\n ");
         for (int64_t i = 0; i < ne0; ++i) {
             int64_t idx = i + j * ne0;
-            printf(" %.2f", data[idx]);
+            print_scalar_value(tensor, idx);
         }
     }
     printf(" ]\n");
 }
 
-void print_ggml_3d_tensor(const struct ggml_tensor *tensor) {
-    const int64_t ne0 = tensor->ne[0]; // innermost
-    const int64_t ne1 = tensor->ne[1]; // middle
-    const int64_t ne2 = tensor->ne[2]; // outermost
+void print_ggml_3d_tensor(const ggml_tensor *tensor) {
+    const int64_t ne0 = tensor->ne[0];
+    const int64_t ne1 = tensor->ne[1];
+    const int64_t ne2 = tensor->ne[2];
 
-    printf("Result (shape %lld x %lld x %lld):\n", ne0, ne1, ne2);
-
+    printf("Result (internal shape %lld x %lld x %lld):\n", ne0, ne1, ne2);
     for (int64_t k = 0; k < ne2; ++k) {
         printf("Slice %lld:\n[", k);
         for (int64_t j = 0; j < ne1; ++j) {
-            if (j > 0)
-                printf("\n");
+            if (j > 0) printf("\n ");
             for (int64_t i = 0; i < ne0; ++i) {
                 int64_t idx = i + j * ne0 + k * ne0 * ne1;
-                float val;
-                if (tensor->type == GGML_TYPE_F16) {
-                    ggml_fp16_t *data_f16 = (ggml_fp16_t *)tensor->data;
-                    val = ggml_fp16_to_fp32(data_f16[idx]);
-                } else if (tensor->type == GGML_TYPE_F32) {
-                    float *data_f32 = (float *)tensor->data;
-                    val = data_f32[idx];
-                } else {
-                    printf("Unsupported tensor type\n");
-                    return;
-                }
-                printf(" %.2f", val);
+                print_scalar_value(tensor, idx);
             }
         }
         printf(" ]\n\n");
     }
 }
-
 
 struct ggml_tensor *create_1d_tensor(struct ggml_context *ctx, const float *data, int64_t ne0) {
     struct ggml_tensor *tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne0);

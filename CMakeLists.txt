@@ -28,3 +28,6 @@ add_executable(test_quantizer tests/test_quantizer.cpp)
 target_include_directories(test_quantizer PRIVATE include ggml/include ggml)
 target_link_libraries(test_quantizer PRIVATE ggml)
 
+add_executable(test_mul_mat tests/test_mul_mat.cpp)
+target_include_directories(test_mul_mat PRIVATE include ggml/include ggml)
+target_link_libraries(test_mul_mat PRIVATE ggml)
