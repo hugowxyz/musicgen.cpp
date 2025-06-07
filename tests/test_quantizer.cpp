@@ -118,8 +118,6 @@ void test_ee() {
     free(ctx_data);
 }
 
-
-
 int main() {
     // test_quantizer_encode();
     test_ee();

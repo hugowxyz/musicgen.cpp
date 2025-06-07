@@ -7,19 +7,20 @@
 struct ggml_tensor * streamable_conv1d(
     struct ggml_context * ctx,
     struct ggml_tensor  * input,    // [batch_size, in_channels, seq_len]
-    struct ggml_tensor  * weights,  // [kernel_size, in_channels, out_channels]
+    struct ggml_tensor  * weights,  // [out_channels, in_channels, kernels]
     struct ggml_tensor  * bias,     // [out_channels] or NULL
     int                   stride,
     int                   padding,
     int                   dilation) {
 
+    struct ggml_tensor * weights_f16;
     // If weights are not FP16, convert to FP16
     if (weights->type != GGML_TYPE_F16) {
         int64_t ne0 = weights->ne[0]; // kernel_size
         int64_t ne1 = weights->ne[1]; // in_channels
         int64_t ne2 = weights->ne[2]; // out_channels
 
-        struct ggml_tensor * weights_f16 = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, ne0, ne1, ne2);
+        weights_f16 = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, ne0, ne1, ne2);
         float * src = (float *)weights->data;
         ggml_fp16_t * dst = (ggml_fp16_t *)weights_f16->data;
 
@@ -27,15 +28,20 @@ struct ggml_tensor * streamable_conv1d(
             dst[i] = ggml_fp32_to_fp16(src[i]);
         }
 
-        weights = weights_f16;
+        // weights = weights_f16;
     }
 
-    struct ggml_tensor * conv_output = ggml_conv_1d(ctx, weights, input, stride, padding, dilation);
+    struct ggml_tensor * conv_output = ggml_conv_1d(ctx, weights_f16, input, stride, padding, dilation);
 
     if (bias != NULL) {
-        conv_output = ggml_transpose(ctx, conv_output); // [B, T, C]
-        conv_output = ggml_add(ctx, ggml_repeat(ctx, bias, conv_output), conv_output);
-        conv_output = ggml_cont(ctx, ggml_transpose(ctx, conv_output)); // back to [B, C, T], contiguous
+    // Make bias a 3-D tensor [1, out_ch, 1] so its only non-unit dim
+    // lines up with conv_output->ne1
+        struct ggml_tensor * b3 =
+            ggml_reshape_3d(ctx, bias, 1, bias->ne[0], 1);   // cheap: header only
+
+        struct ggml_tensor * b_rep = ggml_repeat(ctx, b3, conv_output);
+
+        conv_output = ggml_add(ctx, b_rep, conv_output);     // FP32 + FP32 → FP32
     }
 
     return conv_output;
