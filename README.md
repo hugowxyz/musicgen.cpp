@@ -1,5 +1,7 @@
 # EnCodec Model Architecture Inference
 
+https://trello.com/b/GJ7FEAv0/musicgen-inference
+
 ## Architecture Overview
 
 ### Encoder
