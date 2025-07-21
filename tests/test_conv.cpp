@@ -1,7 +1,7 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 #include "utils.h"
-#include "conv.h" // Your header file for streamable_conv1d_wn and streamable_conv1d
+#include "conv.h"
 
 #include <vector>
 #include <cstdlib>
@@ -20,17 +20,14 @@ void test_ggml_conv1d() {
     const int dil = 1;
     const int batch = 1;
 
-    // Input and weight data
     float input_data[in_ch * seq_len] = {1, 1, 1, 1, 1};
     float weight_data[kernel * in_ch * out_ch] = {10, 10, 10}; // [K, IC, OC]
     float bias_data[out_ch] = {1};
 
-    // Initialize context
     size_t ctx_size = 1024 * 1024;
     struct ggml_init_params params = {ctx_size, NULL, false};
     struct ggml_context *ctx = ggml_init(params);
 
-    // Tensor creation
     struct ggml_tensor *input_f32 =
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, seq_len, in_ch, batch);
 
@@ -40,7 +37,6 @@ void test_ggml_conv1d() {
     struct ggml_tensor *bias =
         ggml_new_tensor_1d(ctx, GGML_TYPE_F16, out_ch);
 
-    // Populate tensors
     memcpy(input_f32->data, input_data, ggml_nbytes(input_f32));
 
     ggml_fp16_t *dst = (ggml_fp16_t *)weights_f16->data;
@@ -50,16 +46,13 @@ void test_ggml_conv1d() {
 
     memcpy(bias->data, bias_data, ggml_nbytes(bias));
 
-    // Debug prints
     print_ggml_3d_tensor(input_f32);
     print_ggml_3d_tensor(weights_f16);
     print_ggml_1d_tensor(bias);
 
-    // Run 1D convolution
     struct ggml_tensor *output_fp16 =
         ggml_conv_1d(ctx, weights_f16, input_f32, stride, pad, dil);
 
-    // Build and compute graph
     struct ggml_cgraph *gf = ggml_new_graph(ctx);
     ggml_build_forward_expand(gf, output_fp16);
     ggml_graph_compute_with_ctx(ctx, gf, -1);
@@ -70,14 +63,12 @@ void test_ggml_conv1d() {
 }
 
 void test_streamable_conv1d_wn() {
-    // GGML context setup
     const size_t ctx_size = 8 * 1024 * 1024;
     void *ctx_data = malloc(ctx_size);
     struct ggml_context *ctx = ggml_init({.mem_size = ctx_size, .mem_buffer = ctx_data});
 
     std::srand(std::time(nullptr));
 
-    // Dimensions
     const int B = 1;   // batch size
     const int IC = 3;  // input channels
     const int OC = 2;  // output channels
